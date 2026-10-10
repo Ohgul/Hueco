@@ -1,0 +1,57 @@
+name: Compilar Lazo y Hueco para Mac
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+    steps:
+      - name: Descargar el codigo
+        uses: actions/checkout@v4
+
+      - name: Leer version
+        id: ver
+        run: |
+          V=$(grep -Eo 'project\(RemacdentFX VERSION [0-9.]+' CMakeLists.txt | awk '{print $3}')
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+
+      - name: Configurar (descarga JUCE)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compilar Lazo y Hueco (VST3 + AU, Apple Silicon + Intel)
+        run: cmake --build build --config Release --target Lazo_VST3 Lazo_AU Hueco_VST3 Hueco_AU
+
+      - name: Firmar localmente (ad-hoc)
+        run: |
+          for P in Lazo Hueco; do
+            codesign --force --deep --sign - "build/${P}_artefacts/Release/VST3/$P.vst3"
+            codesign --force --deep --sign - "build/${P}_artefacts/Release/AU/$P.component"
+          done
+
+      - name: Validar los Audio Units (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R build/Lazo_artefacts/Release/AU/Lazo.component build/Hueco_artefacts/Release/AU/Hueco.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 2
+          auval -v aufx Lzo1 Rmcd
+          auval -v aufx Hco1 Rmcd
+
+      - name: Crear instalador .pkg
+        run: |
+          chmod +x packaging/make_installer.sh
+          packaging/make_installer.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Subir instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: Remacdent-FX-Instalador-${{ steps.ver.outputs.version }}
+          path: dist/*.pkg
+          retention-days: 30
